@@ -122,9 +122,13 @@ jobs:
           npx prettier --write \
             src/app/src/utils/api.ts \
             src/app/src/utils/api/downloads.ts \
-            src/app/src/pages/eval/components/ResultsView.tsx \
-            src/app/src/utils/api.eval-path.test.ts
+            src/app/src/pages/eval/components/ResultsView.tsx
           npx prettier --check \
+            src/app/src/utils/api.ts \
+            src/app/src/utils/api/downloads.ts \
+            src/app/src/pages/eval/components/ResultsView.tsx
+          npx biome check --write src/app/src/utils/api.eval-path.test.ts
+          npx biome check \
             src/app/src/utils/api.ts \
             src/app/src/utils/api/downloads.ts \
             src/app/src/pages/eval/components/ResultsView.tsx \
@@ -134,11 +138,6 @@ jobs:
             src/pages/eval/components/store.url-encoding.test.ts \
             --sequence.shuffle=false
           npm run tsc
-          npx biome check \
-            src/app/src/utils/api.ts \
-            src/app/src/utils/api/downloads.ts \
-            src/app/src/pages/eval/components/ResultsView.tsx \
-            src/app/src/utils/api.eval-path.test.ts
           git diff --check
 
           if git grep -n -E 'callApi\(`/eval/\$\{evalId\}' -- \
