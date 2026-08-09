@@ -59,6 +59,32 @@ describe('viewCommand', () => {
     );
   });
 
+  it('should preserve the confirmation prompt when --id is provided', async () => {
+    viewCommand(program);
+    const viewCmd = program.commands[0];
+
+    await viewCmd.parseAsync(['node', 'test', '--id', 'eval-123']);
+
+    expect(startServer).toHaveBeenCalledWith(
+      getDefaultPort(),
+      BrowserBehavior.ASK,
+      '/eval/eval-123',
+    );
+  });
+
+  it('should preserve no-open behavior when --id is provided with --no', async () => {
+    viewCommand(program);
+    const viewCmd = program.commands[0];
+
+    await viewCmd.parseAsync(['node', 'test', '--id', 'eval-123', '--no']);
+
+    expect(startServer).toHaveBeenCalledWith(
+      getDefaultPort(),
+      BrowserBehavior.SKIP,
+      '/eval/eval-123',
+    );
+  });
+
   it('should handle directory parameter and set config directory', async () => {
     viewCommand(program);
     const viewCmd = program.commands[0];
