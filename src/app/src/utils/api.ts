@@ -11,6 +11,10 @@ export function getApiBaseUrl(): string {
   return import.meta.env.VITE_PUBLIC_BASENAME || '';
 }
 
+export function getEvalApiPath(evalId: string, suffix = ''): string {
+  return `/eval/${encodeURIComponent(evalId)}${suffix}`;
+}
+
 export async function callApi(path: string, options: RequestInit = {}): Promise<Response> {
   return fetch(`${getApiBaseUrl()}/api${path}`, options);
 }
@@ -55,7 +59,7 @@ export async function updateEvalAuthor(
   evalId: string,
   author: string,
 ): Promise<UpdateEvalAuthorResponse> {
-  const response = await callApi(`/eval/${evalId}/author`, {
+  const response = await callApi(getEvalApiPath(evalId, '/author'), {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
