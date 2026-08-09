@@ -1,0 +1,150 @@
+name: Apply view ID review fix
+
+on:
+  push:
+    branches:
+      - automation/fix-view-id-review
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout contribution branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.1
+        with:
+          ref: feat/view-specific-eval
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Apply URL-segment encoding fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/app/src/pages/eval/components/store.ts")
+          text = path.read_text()
+          replacements = {
+              "`/eval/${id}/table`": "`/eval/${encodeURIComponent(id)}/table`",
+              "`/eval/${id}/metadata-keys`": "`/eval/${encodeURIComponent(id)}/metadata-keys`",
+              "`/eval/${evalId}/metadata-values`": "`/eval/${encodeURIComponent(evalId)}/metadata-values`",
+          }
+
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one occurrence of {old!r}, found {count}")
+              text = text.replace(old, new)
+
+          path.write_text(text)
+          PY
+
+          cat > src/app/src/pages/eval/components/store.url-encoding.test.ts <<'EOF'
+          import { callApi } from '@app/utils/api';
+          import { act } from '@testing-library/react';
+          import { beforeEach, describe, expect, it, vi } from 'vitest';
+          import { useTableStore } from './store';
+
+          vi.mock('@app/utils/api', () => ({
+            callApi: vi.fn(),
+            fetchUserEmail: vi.fn(() => Promise.resolve('test@example.com')),
+            fetchUserId: vi.fn(() => Promise.resolve('test-user-id')),
+            updateEvalAuthor: vi.fn(() => Promise.resolve({})),
+          }));
+
+          const initialTableStoreState = useTableStore.getState();
+
+          describe('eval URL encoding', () => {
+            beforeEach(() => {
+              act(() => {
+                useTableStore.setState(initialTableStoreState, true);
+              });
+              vi.clearAllMocks();
+            });
+
+            it('encodes reserved characters in downstream eval API paths', async () => {
+              const evalId = 'imported/eval?#1';
+              const mockedCallApi = vi.mocked(callApi);
+
+              mockedCallApi
+                .mockResolvedValueOnce({
+                  ok: true,
+                  json: async () => ({
+                    table: { head: { prompts: [], vars: [] }, body: [] },
+                    totalCount: 0,
+                    filteredCount: 0,
+                    config: {},
+                    version: 4,
+                    author: null,
+                    id: evalId,
+                  }),
+                } as Response)
+                .mockResolvedValueOnce({
+                  ok: true,
+                  json: async () => ({ keys: [] }),
+                } as Response)
+                .mockResolvedValueOnce({
+                  ok: true,
+                  json: async () => ({ values: [] }),
+                } as Response);
+
+              await act(async () => {
+                await useTableStore.getState().fetchEvalData(evalId);
+                await useTableStore.getState().fetchMetadataKeys(evalId);
+                await useTableStore.getState().fetchMetadataValues(evalId, 'category');
+              });
+
+              expect(mockedCallApi.mock.calls[0][0]).toContain(
+                '/eval/imported%2Feval%3F%231/table',
+              );
+              expect(mockedCallApi.mock.calls[1][0]).toBe(
+                '/eval/imported%2Feval%3F%231/metadata-keys',
+              );
+              expect(mockedCallApi.mock.calls[2][0]).toBe(
+                '/eval/imported%2Feval%3F%231/metadata-values?key=category',
+              );
+            });
+          });
+          EOF
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused regression test and typecheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx prettier --write \
+            src/app/src/pages/eval/components/store.ts \
+            src/app/src/pages/eval/components/store.url-encoding.test.ts
+          npx prettier --check \
+            src/app/src/pages/eval/components/store.ts \
+            src/app/src/pages/eval/components/store.url-encoding.test.ts
+          npx vitest run \
+            src/app/src/pages/eval/components/store.url-encoding.test.ts \
+            --sequence.shuffle=false
+          npm run tsc
+          git diff --check
+
+      - name: Commit and push contribution fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/app/src/pages/eval/components/store.ts \
+            src/app/src/pages/eval/components/store.url-encoding.test.ts
+          git commit -m "fix(view): encode eval ids in API paths"
+          git push origin HEAD:feat/view-specific-eval
