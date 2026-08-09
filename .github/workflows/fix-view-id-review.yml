@@ -134,8 +134,8 @@ jobs:
           npx prettier --check \
             src/app/src/pages/eval/components/store.ts \
             src/app/src/pages/eval/components/store.url-encoding.test.ts
-          npx vitest run \
-            src/app/src/pages/eval/components/store.url-encoding.test.ts \
+          npm run test:ci --prefix src/app -- \
+            src/pages/eval/components/store.url-encoding.test.ts \
             --sequence.shuffle=false
           npm run tsc
           git diff --check
