@@ -1,0 +1,164 @@
+name: Apply comprehensive eval ID path fix
+
+on:
+  push:
+    branches:
+      - automation/fix-all-eval-id-paths
+  pull_request:
+    branches:
+      - feat/view-specific-eval
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout contribution branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.1
+        with:
+          ref: feat/view-specific-eval
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Apply comprehensive eval ID encoding fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one occurrence in {path} of {old!r}, found {count}")
+              path.write_text(text.replace(old, new))
+
+          api = Path("src/app/src/utils/api.ts")
+          text = api.read_text()
+          marker = "export async function callApi(path: string, options: RequestInit = {}): Promise<Response> {\n"
+          helper = (
+              "export function getEvalApiPath(evalId: string, suffix = ''): string {\n"
+              "  return `/eval/${encodeURIComponent(evalId)}${suffix}`;\n"
+              "}\n\n"
+          )
+          if helper not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit("Could not find callApi insertion point")
+              text = text.replace(marker, helper + marker)
+          old_author = "const response = await callApi(`/eval/${evalId}/author`, {"
+          new_author = "const response = await callApi(getEvalApiPath(evalId, '/author'), {"
+          if text.count(old_author) != 1:
+              raise SystemExit(f"Expected author path once, found {text.count(old_author)}")
+          api.write_text(text.replace(old_author, new_author))
+
+          results = Path("src/app/src/pages/eval/components/ResultsView.tsx")
+          replace_once(
+              results,
+              "import { callApi } from '@app/utils/api';",
+              "import { callApi, getEvalApiPath } from '@app/utils/api';",
+          )
+          text = results.read_text()
+          if text.count("callApi(`/eval/${evalId}`, {") != 2:
+              raise SystemExit("Expected rename/delete eval paths exactly twice")
+          text = text.replace("callApi(`/eval/${evalId}`, {", "callApi(getEvalApiPath(evalId), {")
+          if text.count("callApi(`/eval/${evalId}/copy`, {") != 1:
+              raise SystemExit("Expected copy eval path exactly once")
+          text = text.replace(
+              "callApi(`/eval/${evalId}/copy`, {",
+              "callApi(getEvalApiPath(evalId, '/copy'), {",
+          )
+          results.write_text(text)
+
+          downloads = Path("src/app/src/utils/api/downloads.ts")
+          replace_once(
+              downloads,
+              "import { callApi } from '../api';",
+              "import { callApi, getEvalApiPath } from '../api';",
+          )
+          replace_once(
+              downloads,
+              "const response = await callApi(`/eval/${evalId}/table?format=${format}`, {",
+              "const response = await callApi(getEvalApiPath(evalId, `/table?format=${format}`), {",
+          )
+
+          test_path = Path("src/app/src/utils/api.eval-path.test.ts")
+          test_path.write_text(
+              "import { describe, expect, it } from 'vitest';\n"
+              "import { getEvalApiPath } from './api';\n\n"
+              "describe('getEvalApiPath', () => {\n"
+              "  it('encodes reserved characters before appending an API suffix', () => {\n"
+              "    expect(getEvalApiPath('imported/eval?#1')).toBe('/eval/imported%2Feval%3F%231');\n"
+              "    expect(getEvalApiPath('imported/eval?#1', '/copy')).toBe(\n"
+              "      '/eval/imported%2Feval%3F%231/copy',\n"
+              "    );\n"
+              "    expect(getEvalApiPath('imported/eval?#1', '/table?format=csv')).toBe(\n"
+              "      '/eval/imported%2Feval%3F%231/table?format=csv',\n"
+              "    );\n"
+              "  });\n"
+              "});\n"
+          )
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate the fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx prettier --write \
+            src/app/src/utils/api.ts \
+            src/app/src/utils/api/downloads.ts \
+            src/app/src/pages/eval/components/ResultsView.tsx \
+            src/app/src/utils/api.eval-path.test.ts
+          npx prettier --check \
+            src/app/src/utils/api.ts \
+            src/app/src/utils/api/downloads.ts \
+            src/app/src/pages/eval/components/ResultsView.tsx \
+            src/app/src/utils/api.eval-path.test.ts
+          npm run test:ci --prefix src/app -- \
+            src/utils/api.eval-path.test.ts \
+            src/pages/eval/components/store.url-encoding.test.ts \
+            --sequence.shuffle=false
+          npm run tsc
+          npx biome check \
+            src/app/src/utils/api.ts \
+            src/app/src/utils/api/downloads.ts \
+            src/app/src/pages/eval/components/ResultsView.tsx \
+            src/app/src/utils/api.eval-path.test.ts
+          git diff --check
+
+          if git grep -n -E 'callApi\(`/eval/\$\{evalId\}' -- \
+            src/app/src/pages/eval/components/ResultsView.tsx \
+            src/app/src/utils/api.ts \
+            src/app/src/utils/api/downloads.ts; then
+            echo "Found a remaining raw evalId API interpolation in viewer actions." >&2
+            exit 1
+          fi
+
+      - name: Commit and push contribution fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "seva9523"
+          git config user.email "188485706+seva9523@users.noreply.github.com"
+          git add \
+            src/app/src/utils/api.ts \
+            src/app/src/utils/api/downloads.ts \
+            src/app/src/pages/eval/components/ResultsView.tsx \
+            src/app/src/utils/api.eval-path.test.ts
+          git commit -m "fix(view): encode eval ids in all API actions"
+          git push origin HEAD:feat/view-specific-eval
