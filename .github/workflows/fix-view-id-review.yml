@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - automation/fix-view-id-review
+  pull_request:
+    branches:
+      - feat/view-specific-eval
 
 permissions:
   contents: write
