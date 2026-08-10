@@ -1,0 +1,87 @@
+name: Apply nullable eval ID build fix
+
+on:
+  push:
+    branches:
+      - automation/fix-view-null-eval-id
+  pull_request:
+    branches:
+      - feat/view-specific-eval
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-view-null-eval-id-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout contribution branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.1
+        with:
+          ref: feat/view-specific-eval
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Apply nullable eval ID fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/app/src/pages/eval/components/ResultsView.tsx")
+          text = path.read_text()
+          old = """        invariant(config, 'Config must be loaded before updating its description');
+        const newConfig = { ...config, description: newName };
+
+        const response = await callApi(getEvalApiPath(evalId), {
+"""
+          new = """        invariant(config, 'Config must be loaded before updating its description');
+        invariant(evalId, 'Eval ID must be set before updating its description');
+        const newConfig = { ...config, description: newName };
+
+        const response = await callApi(getEvalApiPath(evalId), {
+"""
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected one rename block, found {count}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate app build and focused tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx prettier --write src/app/src/pages/eval/components/ResultsView.tsx
+          npx prettier --check src/app/src/pages/eval/components/ResultsView.tsx
+          npx vitest run \
+            src/app/src/pages/eval/components/ResultsView.test.tsx \
+            src/app/src/pages/eval/components/ResultsView.delete.test.tsx \
+            --sequence.shuffle=false
+          npm run build:app
+          npm run tsc
+          git diff --check
+
+      - name: Commit and push contribution fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "seva9523"
+          git config user.email "188485706+seva9523@users.noreply.github.com"
+          git add src/app/src/pages/eval/components/ResultsView.tsx
+          git commit -m "fix(view): require eval ID before rename"
+          git push origin HEAD:feat/view-specific-eval
