@@ -3,13 +3,16 @@ name: Validate view dot-segment guard
 on:
   push:
     branches:
+      - automation/validate-view-dot-segments
+  pull_request:
+    branches:
       - feat/view-specific-eval
 
 permissions:
   contents: read
 
 concurrency:
-  group: validate-view-dot-segments-${{ github.ref }}
+  group: validate-view-dot-segments-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
