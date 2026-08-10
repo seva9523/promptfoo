@@ -53,6 +53,12 @@ export function viewCommand(program: Command) {
             : BrowserBehavior.ASK;
 
         if (cmdObj.id) {
+          if (cmdObj.id === '.' || cmdObj.id === '..') {
+            throw new Error(
+              'Eval IDs "." and ".." cannot be opened with --id because browsers normalize dot-segment URL paths.',
+            );
+          }
+
           await startServer(cmdObj.port, browserBehavior, `/eval/${encodeURIComponent(cmdObj.id)}`);
           return;
         }
