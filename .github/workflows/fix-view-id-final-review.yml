@@ -1,0 +1,162 @@
+name: Apply final view ID review fixes
+
+on:
+  pull_request:
+    branches:
+      - feat/view-specific-eval
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout contribution branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.1
+        with:
+          ref: feat/view-specific-eval
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Apply manual-rating and test-mock fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one occurrence, found {count}: {old!r}")
+              file.write_text(text.replace(old, new))
+
+          replace_once(
+              "src/app/src/pages/eval/components/ResultsTable.tsx",
+              "import { EVAL_ROUTES, ROUTES } from '@app/constants/routes';",
+              "import { ROUTES } from '@app/constants/routes';",
+          )
+          replace_once(
+              "src/app/src/pages/eval/components/ResultsTable.tsx",
+              "import { callApi } from '@app/utils/api';",
+              "import { callApi, getEvalApiPath } from '@app/utils/api';",
+          )
+          replace_once(
+              "src/app/src/pages/eval/components/ResultsTable.tsx",
+              "EVAL_ROUTES.RESULT_RATING(evalId, resultId)",
+              "getEvalApiPath(evalId, `/results/${encodeURIComponent(resultId)}/rating`)",
+          )
+          replace_once(
+              "src/app/src/pages/eval/components/ResultsTable.tsx",
+              "EVAL_ROUTES.DETAIL(evalId)",
+              "getEvalApiPath(evalId)",
+          )
+
+          mock_helper = (
+              "  getEvalApiPath: (evalId: string, suffix = '') => "
+              "`/eval/${encodeURIComponent(evalId)}${suffix}`,\n"
+          )
+
+          replacements = {
+              "src/app/src/pages/eval/components/ResultsTable.test.tsx": (
+                  "vi.mock('@app/utils/api', () => ({\n"
+                  "  callApi: vi.fn(() => Promise.resolve({ ok: true })),\n"
+                  "}));",
+                  "vi.mock('@app/utils/api', () => ({\n"
+                  "  callApi: vi.fn(() => Promise.resolve({ ok: true })),\n"
+                  + mock_helper
+                  + "}));",
+              ),
+              "src/app/src/pages/eval/components/ResultsView.test.tsx": (
+                  "vi.mock('@app/utils/api', () => ({\n"
+                  "  callApi: vi.fn(),\n"
+                  "  fetchUserEmail: vi.fn().mockResolvedValue('test@example.com'),",
+                  "vi.mock('@app/utils/api', () => ({\n"
+                  "  callApi: vi.fn(),\n"
+                  + mock_helper
+                  + "  fetchUserEmail: vi.fn().mockResolvedValue('test@example.com'),",
+              ),
+              "src/app/src/pages/eval/components/ResultsView.delete.test.tsx": (
+                  "vi.mock('@app/utils/api', () => ({\n"
+                  "  callApi: vi.fn(),\n"
+                  "  fetchUserEmail: vi.fn().mockResolvedValue(null),",
+                  "vi.mock('@app/utils/api', () => ({\n"
+                  "  callApi: vi.fn(),\n"
+                  + mock_helper
+                  + "  fetchUserEmail: vi.fn().mockResolvedValue(null),",
+              ),
+              "src/app/src/utils/api/downloads.test.ts": (
+                  "vi.mock('../api', () => ({\n"
+                  "  callApi: vi.fn(),\n"
+                  "}));",
+                  "vi.mock('../api', () => ({\n"
+                  "  callApi: vi.fn(),\n"
+                  + mock_helper
+                  + "}));",
+              ),
+          }
+
+          for path, (old, new) in replacements.items():
+              replace_once(path, old, new)
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Format and validate focused Web UI tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            src/app/src/pages/eval/components/ResultsTable.tsx
+            src/app/src/pages/eval/components/ResultsTable.test.tsx
+            src/app/src/pages/eval/components/ResultsView.test.tsx
+            src/app/src/pages/eval/components/ResultsView.delete.test.tsx
+            src/app/src/utils/api/downloads.test.ts
+          )
+
+          npx prettier --write "${files[@]}"
+          npx prettier --check "${files[@]}"
+
+          npm run test:ci --prefix src/app -- \
+            src/pages/eval/components/ResultsTable.test.tsx \
+            src/pages/eval/components/ResultsView.test.tsx \
+            src/pages/eval/components/ResultsView.delete.test.tsx \
+            src/utils/api/downloads.test.ts \
+            src/utils/api.test.ts \
+            --sequence.shuffle=false
+
+          npm run tsc
+          npm run l
+          git diff --check
+
+          if git grep -n -E 'EVAL_ROUTES\.(RESULT_RATING|DETAIL)\(evalId' -- \
+            src/app/src/pages/eval/components/ResultsTable.tsx; then
+            echo "Raw manual-rating eval path remains." >&2
+            exit 1
+          fi
+
+      - name: Commit and push review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "seva9523"
+          git config user.email "188485706+seva9523@users.noreply.github.com"
+          git add \
+            src/app/src/pages/eval/components/ResultsTable.tsx \
+            src/app/src/pages/eval/components/ResultsTable.test.tsx \
+            src/app/src/pages/eval/components/ResultsView.test.tsx \
+            src/app/src/pages/eval/components/ResultsView.delete.test.tsx \
+            src/app/src/utils/api/downloads.test.ts
+          git commit -m "fix(view): encode manual rating eval paths"
+          git push origin HEAD:feat/view-specific-eval
