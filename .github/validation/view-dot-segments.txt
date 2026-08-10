@@ -1,0 +1,1 @@
+Fork-only trigger for validating the `view --id` dot-segment guard.
